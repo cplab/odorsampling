@@ -14,7 +14,7 @@ python -m odorsampling -h
 This should print out a list of commands and arguments that can be configured.
 
 ### Linux users:
-- *Remember to run* `sudo apt update && sudo apt upgrade` *and* `sudo apt-get update && sudo apt-get upgrade`
+- *Remember to run* `sudo apt update && sudo apt upgrade` *or* equivalent`
 - You must install tkinter to display the graphs (if it isn't already installed). It will still run without it-
   however the only way to view the graphs would be through the generated PDFs.
 - Run `sudo apt-get install python-tk` if you see an error that says something like "`Unable to load matplotlib backend [mpl_backend_name]. Please ensure any required packages are installed to use this backend.`"

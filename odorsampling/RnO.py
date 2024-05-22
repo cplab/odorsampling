@@ -32,17 +32,16 @@ from odorsampling import layers, config, utils
 
 # Used for asserts
 from numbers import Real
-from typing import Sequence
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from typing import Union, Optional, Any
+    from typing import Union, Optional, Any, Iterable
     from numbers import Number
     from odorsampling import cells
 
 logger = logging.getLogger(__name__)
-config.default_log_setup(logger)
+utils.default_log_setup(logger)
 
 
 # SD_NUMBER = 1.5
@@ -138,8 +137,6 @@ class Ligand:
         """Sets loc equal to value.
         Precondition: Value is a List"""
         # TODO: make tuple everywhere
-        print(value)
-        print(list(map(float, value)))
         self._loc = tuple(map(float, value))
     
     @property
@@ -199,6 +196,7 @@ class Ligand:
         assert value >= 0.0 and value <= 1.0, "Occ is not btwn 0 and 1"
         self._occ = float(value)
 
+# Below used in dPsiBarSaturation
     def appendToAffs(self, value: float) -> None:
         """adds aff equal to value.
         Precondition: Value is a float"""
@@ -234,6 +232,7 @@ class Ligand:
         self.aff = 0.0
         self.eff = 0.0
         self.occ = 0.0
+        # Used in sumOfSquaresVectorized
         self._affs: list[float] = []
         self._effs: list[float] = []
         self._odors2 = []
@@ -247,7 +246,6 @@ class Ligand:
         """
         # TODO: make sure within bounds
         loc = [utils.RNG.uniform(-1000, 1000) for _ in range(dim)]
-        print(f"Generated: {loc}")
         return Ligand(id_, loc, conc)
     
     @classmethod
@@ -491,7 +489,7 @@ class Receptor:
         return self._mean
 
     @mean.setter
-    def mean(self, value: Sequence):
+    def mean(self, value: Iterable[float]):
         """Sets id to value
         Precondtion: value is an list"""
         self._mean = tuple(value)
@@ -619,15 +617,16 @@ class Receptor:
         to how to randomly distribute those values.
         scaleEff is empty unless want to have a diff sd for aff and eff.
         Precondition: qspace must have "dim" dimensions"""
-        print(qspace)
-        print(qspace._size)
-        print(dim)
+        # print(qspace)
+        # print(qspace._size)
+        # print(dim)
         assert len(qspace._size) == dim, f"QSpace dims do not match. (QSpace:{qspace._size}, passed:{dim})"
         mean = _distributeMean(dim, qspace, constMean)
         sdA = _distributeSD(dim, scale)
         sdE = _distributeSD(dim, scaleEff) if scaleEff is not None else sdA
         return cls(id_, mean, sdA, sdE)
 
+    # TODO: Use pandas to store this data, then use properties to hide/prevent DataFrame access/object leakage
     def save(self, name: str, helper=False):
         """Stores receptor as one row in a CSV file with the following columns:
         A = ID# of receptor
@@ -736,17 +735,14 @@ class Epithelium:
         """Sets receptors equal to value.
         Precondition: Value is a List"""
         # assert isinstance(value, Sequence), f"Value is not a Sequence! {type(value)}"
-        value = tuple(value)
-        old = getattr(self, "_recs", None)
-        logger.debug("Epithelium receptors changed: [%s->%s]", old, value)
-        self._recs = value
+        self._recs = tuple(value)
     
     def __init__(self, recs):
         """Initializes a epithelium."""
         self.recs = recs
 
     @classmethod
-    def create(cls, n: int, dim: int, qspace: QSpace, scale: tuple[float]=(.5,1.5), scaleEff=[], constMean=False):
+    def create(cls, n: int, dim: int, qspace: QSpace, scale: tuple[float, float]=(.5,1.5), scaleEff: Optional[tuple[float, float]] = None, constMean=False):
         """Returns an epithelium with n receptors by calling createReceptor n times.
         SD of each receptor is a uniformly chosen # btwn scale[0] and scale[1]
         Precondition: n is an int"""
@@ -812,26 +808,23 @@ def modifyLoc(odorant: Ligand, qspace: QSpace, dim: int):
     """Modifies an odorant's location to be within the given qspace of the odorscene
     Precondition: QSpace dimensions are consistent with dim"""
     assert len(qspace.size) == dim, "QSpace dimensions are not consistent with ligand locations"
-    print(f"QSpace: {qspace}")
-    # FIXME: There were issues with this code. This is the original-ish code (converted to list-comp)
-    # odorant.loc = [
-    #     (int(loc + abs(qspace.size[i][0])) % abs(qspace.size[i][0]) + abs(qspace.size[i][1])) - abs(qspace.size[i][0])
-    #      for i, loc in enumerate(odorant.loc)
-    # ]
-    # Added parenthesis seems to have fixed the issue.
-    odorant.loc = [
-        (int(loc + abs(qspace.size[i][0])) % (abs(qspace.size[i][0]) + abs(qspace.size[i][1]))) - abs(qspace.size[i][0])
-         for i, loc in enumerate(odorant.loc)
-    ]
+    i = 0
+    loc = list(odorant.loc)
+    while i < dim:
+        loc[i] = ((loc[i] + (abs(qspace.size[i][0]))) % (abs(qspace.size[i][0]) +
+                                abs(qspace.size[i][1]))) + -1 * abs(qspace.size[i][0])
+        i += 1
+    odorant.loc = loc
     return odorant
 
 def _distributeMean(dim: int, qspace: QSpace, constMean: bool):
     """Returns a list of means randomly distributed within the qspace based on the Type"""
-    mean = []
-    i = 0
     if constMean:
-        mean = [qspace.size[i][1]/2.0 for i in dim]
+        mean = [qspace.size[i][1]/2.0 for i in range(dim)]
     else:
+        # TODO: Simplify later
+        mean = []
+        i = 0
         while i < dim:
             if config.DIST_TYPE_UNIF:
                 mean.append(utils.RNG.uniform(qspace.size[i][0], qspace.size[i][1]))
@@ -1129,8 +1122,8 @@ def sumOfSquaresVectorized(epithelium: Epithelium, odorscene: Odorscene, dn, rep
         '''
         oi = 0
         for odor in odorscene.odors:
-            # print(f"odor.aff={odor.aff}\nodor._affs={odor._affs}\ncounter={counter}\n")
-            # logger.debug("odor.aff=%s\nodor._affs=%s\ncounter=%s\n", odor.aff, odor._affs, counter)
+            # print(counter)
+            # print(len(odor._affs), len(odor._effs))
             odor.aff = odor._affs[counter]
             odor.eff = odor._effs[counter]
             
@@ -1377,12 +1370,12 @@ def dPsiBarCalcAnglesOrig(epithelium: Epithelium, odorscene: Odorscene, r, fixed
     return totalDpsi/rep
 
 
-
+# HERE
 def dPsiBarCalcAngles(epithelium: Epithelium, odorscene: Odorscene, r, fixed=False, text=None, c=1, gl: layers.GlomLayer = None):
     """Calculates dPsiBar = the average dPsi value of an odorscene that
     changes location by the same amplitude r but "rep" different directions based on
     randomized angles."""
-
+    gl = layers.GlomLayer() if gl is None else gl
     #print("start of dPsiBarCalcAngles")
     gl = layers.GlomLayer() if gl is None else gl
     
@@ -1677,6 +1670,7 @@ def dPsiBarCalcDns(odorscene: Odorscene, r, rep: int):
 
     return dn
 
+@utils.verbose_if_debug
 def dPsiBarSaturation(epithelium: Epithelium, r, qspace: QSpace, pdfName: str, labelName: str,
                       excelName: str, fixed=False, c=1, plotTitle="", close=False, purp='', graphIt=True):
     """
@@ -2319,6 +2313,7 @@ def drawEllipseGraph(qspace: QSpace, epithelium: Epithelium, odorscenesArray: li
     #Not closing it will add odor locations to it
     plt.close()
     
+@utils.verbose_if_debug
 def graphFromExcel(name: str, xaxis: list[int], numRecs: int, labelName: str, titleName: str, pdfName: str, toggle: str, rep=10.0, close=False):
     """Given a CSV file from dpsiBarSaturation, create a graph of average receptor
     activation vs num of ligands.
@@ -2353,7 +2348,7 @@ def graphFromExcel(name: str, xaxis: list[int], numRecs: int, labelName: str, ti
 
     text.close()
     
-    print(activ)
+    # print(activ)
     
     plt.plot(xaxis,activ, label=labelName)
     plt.legend()
@@ -2375,6 +2370,7 @@ def graphFromExcel(name: str, xaxis: list[int], numRecs: int, labelName: str, ti
     if close == True: #No more data to add to the graph
         plt.close()
 
+@utils.verbose_if_debug
 def dPsiGraphFromExcel(name: str, qspace: QSpace, titleName: str, pdfName: str, close=False):
     """Given an excel doc with dPsiBar data (generated in simulation)
     this function returns a valid graph
@@ -2416,6 +2412,7 @@ def dPsiGraphFromExcel(name: str, qspace: QSpace, titleName: str, pdfName: str, 
     if close == True: #No more data to add to the graph
         plt.close()
 
+@utils.verbose_if_debug
 def dPsiOccActGraphFromExcel(nameDpsi: str, nameAO: str, xaxis: list[int], numRecs: int, labelName: str,
                              titleName: str, pdfName: str, color="b", rep=200.0, close=False):
     """Given three excel docs (DpsiBar, Act, Occ) generated from the simulation,
@@ -2432,7 +2429,7 @@ def dPsiOccActGraphFromExcel(nameDpsi: str, nameAO: str, xaxis: list[int], numRe
     ###extract dPsi info
     with open(nameDpsi) as f:
         dPsi = [float(line[line.find(",")+1:]) for i, line in enumerate(f.readlines()) if i>0]
-    print(dPsi)
+    # print(dPsi)
     ###extract act and occ info
     length = len(xaxis)
     text = open(nameAO)
